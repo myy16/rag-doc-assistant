@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 
 from app.core.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_MB, UPLOAD_DIR
+from app.core.parser import parse_document
 
 router = APIRouter()
 
@@ -49,12 +50,18 @@ async def upload_documents(files: List[UploadFile] = File(...)):
         with open(save_path, "wb") as f:
             f.write(content)
 
+        try:
+            extracted_text = parse_document(save_path, ext)
+        except RuntimeError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
         uploaded.append({
             "file_id": file_id,
             "original_name": file.filename,
             "file_type": ext,
             "size_mb": round(size_mb, 3),
             "saved_path": save_path,
+            "extracted_text": extracted_text,
         })
 
     return JSONResponse(

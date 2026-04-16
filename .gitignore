@@ -3,3 +3,5 @@ backend/uploads/
 __pycache__/
 *.pyc
 .env
+.DS_Store
+.history/
