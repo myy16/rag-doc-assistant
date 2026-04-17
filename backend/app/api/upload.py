@@ -24,16 +24,20 @@ def _validate_file(file: UploadFile) -> str:
     return ext
 
 
-async def _process_file(file: UploadFile) -> dict:
-    """Validate, save, parse, clean and chunk a single uploaded file."""
+async def _read_upload(file: UploadFile) -> tuple:
+    """Read file content eagerly before any streaming starts."""
     ext = _validate_file(file)
-
     content = await file.read()
+    return file.filename, ext, content
+
+
+def _process_content(filename: str, ext: str, content: bytes) -> dict:
+    """Save, parse, clean and chunk already-read file content."""
     size_mb = len(content) / (1024 * 1024)
     if size_mb > MAX_FILE_SIZE_MB:
         raise HTTPException(
             status_code=400,
-            detail=f"'{file.filename}' exceeds the {MAX_FILE_SIZE_MB} MB size limit.",
+            detail=f"'{filename}' exceeds the {MAX_FILE_SIZE_MB} MB size limit.",
         )
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -48,14 +52,14 @@ async def _process_file(file: UploadFile) -> dict:
         text=cleaned_text,
         metadata={
             "file_id": file_id,
-            "source_file": file.filename,
+            "source_file": filename,
             "file_type": ext,
         },
     )
 
     return {
         "file_id": file_id,
-        "original_name": file.filename,
+        "original_name": filename,
         "file_type": ext,
         "size_mb": round(size_mb, 3),
         "saved_path": save_path,
@@ -77,7 +81,8 @@ async def upload_documents(files: List[UploadFile] = File(...)):
     uploaded = []
     for file in files:
         try:
-            result = await _process_file(file)
+            filename, ext, content = await _read_upload(file)
+            result = _process_content(filename, ext, content)
         except RuntimeError as e:
             raise HTTPException(status_code=422, detail=str(e))
         uploaded.append(result)
@@ -93,6 +98,9 @@ async def upload_documents_stream(files: List[UploadFile] = File(...)):
     """
     Upload one or more documents with Server-Sent Events (SSE) streaming.
 
+    Reads all file contents eagerly before streaming begins to avoid
+    closed-file errors inside the async generator.
+
     Emits one JSON event per file as it finishes processing, then a final
     'done' event. Frontend can consume with EventSource or fetch + ReadableStream.
 
@@ -104,18 +112,27 @@ async def upload_documents_stream(files: List[UploadFile] = File(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No files provided.")
 
+    # Read all file contents before entering the generator
+    file_payloads = []
+    for file in files:
+        try:
+            filename, ext, content = await _read_upload(file)
+            file_payloads.append((filename, ext, content))
+        except HTTPException as exc:
+            raise exc
+
     async def event_generator() -> AsyncGenerator[str, None]:
         count = 0
-        for file in files:
+        for filename, ext, content in file_payloads:
             try:
-                result = await _process_file(file)
+                result = _process_content(filename, ext, content)
                 payload = json.dumps({"event": "file_done", "file": result}, ensure_ascii=False)
                 yield f"data: {payload}\n\n"
                 count += 1
             except (HTTPException, RuntimeError) as exc:
                 detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
                 payload = json.dumps(
-                    {"event": "error", "filename": file.filename, "detail": detail},
+                    {"event": "error", "filename": filename, "detail": detail},
                     ensure_ascii=False,
                 )
                 yield f"data: {payload}\n\n"
