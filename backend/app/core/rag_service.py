@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -50,6 +51,43 @@ class RagService:
             "context": chunks,
             "model": self.model_name,
         }
+
+    def answer_question_stream(
+        self,
+        question: str,
+        top_k: int = CHROMA_TOP_K,
+        file_id: Optional[str] = None,
+        source_file: Optional[str] = None,
+    ):
+        """Answer question with streaming response. Yields SSE events.
+        
+        Stream format (one JSON per line):
+        data: {"type": "token", "content": "text"}
+        data: {"type": "sources", "content": [...]}
+        """
+        chunks = self.retriever.retrieve(question, top_k=top_k, file_id=file_id, source_file=source_file)
+        if not chunks:
+            event = {"type": "message", "content": "İlgili bağlam bulunamadı.", "model": self.model_name}
+            yield f"data: {json.dumps(event)}\n\n"
+            return
+
+        context_text = self._build_context(chunks)
+        prompt = (
+            "You are a helpful assistant answering questions only from the provided context. "
+            "If the answer is not in the context, say you could not find it. "
+            "Cite sources inline with [source_file:chunk_index].\n\n"
+            f"Context:\n{context_text}\n\nQuestion: {question}\nAnswer:"
+        )
+        
+        # Stream tokens from Groq
+        for token in self._call_groq_stream(prompt=prompt):
+            event = {"type": "token", "content": token}
+            yield f"data: {json.dumps(event)}\n\n"
+        
+        # Send sources after streaming completes
+        sources = self._build_sources(chunks)
+        event = {"type": "sources", "content": sources}
+        yield f"data: {json.dumps(event)}\n\n"
 
     def summarize_documents(
         self,
@@ -114,6 +152,30 @@ class RagService:
             temperature=0.2,
         )
         return response.choices[0].message.content.strip()
+
+    def _call_groq_stream(self, prompt: str):
+        """Stream tokens from Groq API. Yields text chunks."""
+        try:
+            from groq import Groq  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise RuntimeError("groq is not installed. Install backend dependencies first.") from exc
+
+        if not self.api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured.")
+
+        client = Groq(api_key=self.api_key)
+        stream = client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "system", "content": "You answer strictly using the given context."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            stream=True,
+        )
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
 
     @staticmethod
     def _build_context(chunks: List[Dict[str, Any]]) -> str:
