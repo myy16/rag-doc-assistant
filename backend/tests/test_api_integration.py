@@ -74,6 +74,20 @@ def test_chat_endpoint_maps_runtime_error_to_503(monkeypatch):
     assert "GROQ_API_KEY" in response.json()["detail"]
 
 
+def test_chat_endpoint_maps_unexpected_error_to_500(monkeypatch):
+    class BrokenService:
+        def answer_question(self, *args, **kwargs):
+            raise ValueError("unexpected")
+
+    monkeypatch.setattr("app.api.chat.get_rag_service", lambda: BrokenService())
+    client = create_test_client()
+
+    response = client.post("/api/chat", json={"question": "test"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error."
+
+
 def test_chat_stream_endpoint_returns_sse(monkeypatch):
     monkeypatch.setattr("app.api.chat.get_rag_service", lambda: FakeRagService())
     client = create_test_client()
@@ -85,6 +99,23 @@ def test_chat_stream_endpoint_returns_sse(monkeypatch):
     body = response.text
     assert '"type":"token"' in body
     assert '"type":"sources"' in body
+
+
+def test_chat_stream_endpoint_emits_error_event_on_runtime_error(monkeypatch):
+    class BrokenService:
+        def answer_question_stream(self, *args, **kwargs):
+            raise RuntimeError("stream unavailable")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr("app.api.chat.get_rag_service", lambda: BrokenService())
+    client = create_test_client()
+
+    response = client.post("/api/chat/stream", json={"question": "stream deneme"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"type": "error"' in response.text
+    assert 'stream unavailable' in response.text
 
 
 def test_summarize_endpoint_returns_summary(monkeypatch):
@@ -114,3 +145,17 @@ def test_summarize_endpoint_maps_runtime_error_to_503(monkeypatch):
 
     assert response.status_code == 503
     assert response.json()["detail"] == "service temporarily unavailable"
+
+
+def test_summarize_endpoint_maps_unexpected_error_to_500(monkeypatch):
+    class BrokenService:
+        def summarize_documents(self, *args, **kwargs):
+            raise ValueError("unexpected")
+
+    monkeypatch.setattr("app.api.summarize.get_rag_service", lambda: BrokenService())
+    client = create_test_client()
+
+    response = client.post("/api/summarize", json={"source_file": "doc.pdf"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error."

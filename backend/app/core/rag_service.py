@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
@@ -8,6 +9,9 @@ from app.core.config import CHROMA_TOP_K, GROQ_API_KEY, GROQ_MODEL_NAME
 from app.core.embeddings import get_embedding_service
 from app.core.retriever import get_retriever
 from app.core.vector_store import get_vector_store
+
+
+logger = logging.getLogger(__name__)
 
 
 class RagService:
@@ -20,11 +24,18 @@ class RagService:
 
     def index_chunks(self, chunks: List[Dict[str, Any]]) -> int:
         if not chunks:
+            logger.debug("No chunks received for indexing.")
             return 0
 
-        texts = [chunk["text"] for chunk in chunks]
-        embeddings = self.embedding_service.embed_texts(texts)
-        return self.vector_store.upsert_chunks(chunks=chunks, embeddings=embeddings)
+        try:
+            texts = [chunk["text"] for chunk in chunks]
+            embeddings = self.embedding_service.embed_texts(texts)
+            count = self.vector_store.upsert_chunks(chunks=chunks, embeddings=embeddings)
+            logger.info("Indexed %s chunks into vector store.", count)
+            return count
+        except Exception as exc:
+            logger.exception("Failed to index chunks into vector store.")
+            raise RuntimeError("Failed to index document chunks.") from exc
 
     def answer_question(
         self,
@@ -33,8 +44,14 @@ class RagService:
         file_id: Optional[str] = None,
         source_file: Optional[str] = None,
     ) -> Dict[str, Any]:
-        chunks = self.retriever.retrieve(question, top_k=top_k, file_id=file_id, source_file=source_file)
+        try:
+            chunks = self.retriever.retrieve(question, top_k=top_k, file_id=file_id, source_file=source_file)
+        except Exception as exc:
+            logger.exception("Retriever failed while answering question.")
+            raise RuntimeError("Failed to retrieve context for question.") from exc
+
         if not chunks:
+            logger.info("No context found for question.")
             return {
                 "answer": "İlgili bağlam bulunamadı.",
                 "sources": [],
@@ -45,6 +62,7 @@ class RagService:
         context_text = self._build_context(chunks)
         answer = self._generate_answer(question=question, context_text=context_text)
         sources = self._build_sources(chunks)
+        logger.info("Generated answer using %s retrieved chunks.", len(chunks))
         return {
             "answer": answer,
             "sources": sources,
@@ -65,7 +83,12 @@ class RagService:
         data: {"type": "token", "content": "text"}
         data: {"type": "sources", "content": [...]}
         """
-        chunks = self.retriever.retrieve(question, top_k=top_k, file_id=file_id, source_file=source_file)
+        try:
+            chunks = self.retriever.retrieve(question, top_k=top_k, file_id=file_id, source_file=source_file)
+        except Exception as exc:
+            logger.exception("Retriever failed while preparing streaming answer.")
+            raise RuntimeError("Failed to retrieve context for streaming question.") from exc
+
         if not chunks:
             event = {"type": "message", "content": "İlgili bağlam bulunamadı.", "model": self.model_name}
             yield f"data: {json.dumps(event)}\n\n"
@@ -95,8 +118,14 @@ class RagService:
         source_file: Optional[str] = None,
         max_chunks: int = 8,
     ) -> Dict[str, Any]:
-        chunks = self.retriever.fetch_documents(file_id=file_id, source_file=source_file)
+        try:
+            chunks = self.retriever.fetch_documents(file_id=file_id, source_file=source_file)
+        except Exception as exc:
+            logger.exception("Retriever failed while summarizing documents.")
+            raise RuntimeError("Failed to fetch documents for summarization.") from exc
+
         if not chunks:
+            logger.info("No documents found for summarization request.")
             return {
                 "summary": "Özetlenecek doküman bulunamadı.",
                 "sources": [],
@@ -109,6 +138,7 @@ class RagService:
         context_text = self._build_context(selected_chunks)
         summary = self._generate_summary(context_text=context_text)
         sources = self._build_sources(selected_chunks)
+        logger.info("Generated summary using %s chunks.", len(selected_chunks))
         return {
             "summary": summary,
             "sources": sources,
@@ -142,16 +172,20 @@ class RagService:
         if not self.api_key:
             raise RuntimeError("GROQ_API_KEY is not configured.")
 
-        client = Groq(api_key=self.api_key)
-        response = client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": "You answer strictly using the given context."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
-        )
-        return response.choices[0].message.content.strip()
+        try:
+            client = Groq(api_key=self.api_key)
+            response = client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You answer strictly using the given context."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as exc:
+            logger.exception("Groq non-stream completion call failed.")
+            raise RuntimeError("LLM generation failed.") from exc
 
     def _call_groq_stream(self, prompt: str):
         """Stream tokens from Groq API. Yields text chunks."""
@@ -163,19 +197,23 @@ class RagService:
         if not self.api_key:
             raise RuntimeError("GROQ_API_KEY is not configured.")
 
-        client = Groq(api_key=self.api_key)
-        stream = client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": "You answer strictly using the given context."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
-            stream=True,
-        )
-        for chunk in stream:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        try:
+            client = Groq(api_key=self.api_key)
+            stream = client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": "You answer strictly using the given context."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                stream=True,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as exc:
+            logger.exception("Groq stream completion call failed.")
+            raise RuntimeError("LLM streaming failed.") from exc
 
     @staticmethod
     def _build_context(chunks: List[Dict[str, Any]]) -> str:
