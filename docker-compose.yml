@@ -11,6 +11,8 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - chroma_data:/app/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
       - RAG_DATA_DIR=/app/data
