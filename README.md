@@ -50,6 +50,8 @@ Durdurmak için:
 docker-compose down
 ```
 
+Chroma vektör verisi Docker volume içinde tutulur ve `backend/data/chroma` altında kalıcıdır.
+
 ---
 
 ## API Endpoints
@@ -101,6 +103,32 @@ Aynı işlemi Server-Sent Events (SSE) ile yapar. Her dosya işlenince anlık ev
 data: {"event": "file_done", "file": {...}}
 data: {"event": "error", "filename": "...", "detail": "..."}
 data: {"event": "done", "count": 1}
+```
+
+---
+
+### POST /api/chat
+
+Yüklenen dokümanlara göre soru-cevap üretir. Kaynakları da response içinde döner.
+
+**Örnek request:**
+```json
+{
+  "question": "Bu dokümanda ana konu nedir?",
+  "top_k": 5
+}
+```
+
+### POST /api/summarize
+
+Seçili doküman veya tüm indeks üzerinden özet üretir.
+
+**Örnek request:**
+```json
+{
+  "source_file": "rapor.pdf",
+  "max_chunks": 8
+}
 ```
 
 ---

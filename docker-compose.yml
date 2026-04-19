@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   backend:
     build:
@@ -10,9 +8,14 @@ services:
       - "8000:8000"
     volumes:
       - uploads_data:/app/uploads
+      - chroma_data:/app/data
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - RAG_DATA_DIR=/app/data
     restart: unless-stopped
 
 volumes:
   uploads_data:
+  chroma_data:

@@ -1,7 +1,9 @@
 backend/venv/
 backend/uploads/
+backend/data/
 __pycache__/
 *.pyc
 .env
 .DS_Store
 .history/
+chat_doc.md
