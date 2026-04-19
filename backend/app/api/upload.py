@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_MB, UPLOAD_DIR
+from app.core.rag_service import get_rag_service
 from app.core.parser import parse_document
 from app.core.cleaner import clean_text
 from app.core.chunker import chunk_text
@@ -56,6 +57,10 @@ def _process_content(filename: str, ext: str, content: bytes) -> dict:
             "file_type": ext,
         },
     )
+
+    if chunks:
+        service = get_rag_service()
+        service.index_chunks(chunks)
 
     return {
         "file_id": file_id,
