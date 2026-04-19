@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -6,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.core.rag_service import get_rag_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class SummarizeRequest(BaseModel):
@@ -24,4 +26,8 @@ def summarize(request: SummarizeRequest):
             max_chunks=request.max_chunks,
         )
     except RuntimeError as exc:
+        logger.warning("Summarize request failed due to runtime dependency issue: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error while handling /api/summarize")
+        raise HTTPException(status_code=500, detail="Internal server error.") from exc

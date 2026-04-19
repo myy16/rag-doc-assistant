@@ -1,7 +1,15 @@
+import logging
+
 from fastapi import FastAPI
 from app.api.upload import router as upload_router
 from app.api.chat import router as chat_router
 from app.api.summarize import router as summarize_router
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 
 app = FastAPI(
     title="P2P YZTA - Chat with Your Documents",
