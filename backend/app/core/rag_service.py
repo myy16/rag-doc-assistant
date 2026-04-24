@@ -98,12 +98,13 @@ class RagService:
 
         context_text = self._build_context(chunks)
         prompt = (
-            "You are a helpful assistant answering questions only from the provided context. "
-            "If the answer is not in the context, say you could not find it. "
-            "Cite sources inline with [source_file:chunk_index].\n\n"
-            f"Context:\n{context_text}\n\nQuestion: {question}\nAnswer:"
+            "Sen yalnızca aşağıdaki bağlamı kullanarak soruları yanıtlayan yardımcı bir asistansın. "
+            "Cevap bağlamda yoksa 'Bu bilgiye dokümanlarda ulaşamadım.' de. "
+            "Türkçe sorulara Türkçe, İngilizce sorulara İngilizce yanıt ver. "
+            "Kaynak gösterirken [dosya_adı:chunk_index] formatını kullan.\n\n"
+            f"Bağlam:\n{context_text}\n\nSoru: {question}\nCevap:"
         )
-        
+
         # Stream tokens from Groq
         for token in self._call_groq_stream(prompt=prompt):
             event = {"type": "token", "content": token}
@@ -151,18 +152,19 @@ class RagService:
 
     def _generate_answer(self, question: str, context_text: str) -> str:
         prompt = (
-            "You are a helpful assistant answering questions only from the provided context. "
-            "If the answer is not in the context, say you could not find it. "
-            "Cite sources inline with [source_file:chunk_index].\n\n"
-            f"Context:\n{context_text}\n\nQuestion: {question}\nAnswer:"
+            "Sen yalnızca aşağıdaki bağlamı kullanarak soruları yanıtlayan yardımcı bir asistansın. "
+            "Cevap bağlamda yoksa 'Bu bilgiye dokümanlarda ulaşamadım.' de. "
+            "Türkçe sorulara Türkçe, İngilizce sorulara İngilizce yanıt ver. "
+            "Kaynak gösterirken [dosya_adı:chunk_index] formatını kullan.\n\n"
+            f"Bağlam:\n{context_text}\n\nSoru: {question}\nCevap:"
         )
         return self._call_groq(prompt=prompt)
 
     def _generate_summary(self, context_text: str) -> str:
         prompt = (
-            "Summarize the provided document chunks in Turkish. "
-            "Keep the summary concise, factual, and grounded in the text.\n\n"
-            f"Context:\n{context_text}\n\nSummary:"
+            "Aşağıdaki doküman parçalarını Türkçe olarak özetle. "
+            "Özet kısa, net ve yalnızca metne dayalı olsun.\n\n"
+            f"Bağlam:\n{context_text}\n\nÖzet:"
         )
         return self._call_groq(prompt=prompt)
 
@@ -180,7 +182,7 @@ class RagService:
             response = client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You answer strictly using the given context."},
+                    {"role": "system", "content": "Yalnızca verilen bağlamı kullanarak yanıt ver. Bağlamda olmayan bilgileri uydurma."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.2,
@@ -205,7 +207,7 @@ class RagService:
             stream = client.chat.completions.create(
                 model=self.model_name,
                 messages=[
-                    {"role": "system", "content": "You answer strictly using the given context."},
+                    {"role": "system", "content": "Yalnızca verilen bağlamı kullanarak yanıt ver. Bağlamda olmayan bilgileri uydurma."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.2,
