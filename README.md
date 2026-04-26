@@ -1,4 +1,4 @@
-# P2P_YZTA — Kendi Dokümanlarınla Sohbet Et
+# rag-doc-assistant — Kendi Dokümanlarınla Sohbet Et
 
 ![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)
