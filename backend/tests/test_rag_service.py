@@ -80,8 +80,6 @@ def build_service(monkeypatch):
 
 def test_index_chunks_uses_embeddings_and_store(monkeypatch):
     service, fake_embedding, _, fake_store = build_service(monkeypatch)
-    # Mock summary generation for contextual chunking
-    monkeypatch.setattr(service, "_generate_document_summary", lambda text: "Doküman özeti")
 
     chunks = [
         {
@@ -93,40 +91,48 @@ def test_index_chunks_uses_embeddings_and_store(monkeypatch):
             "chunk_index": 0,
             "total_chunks": 2,
             "char_count": 13,
-        }
+        },
+        {
+            "chunk_id": "c2",
+            "text": "İkinci chunk",
+            "file_id": "f1",
+            "source_file": "rapor.pdf",
+            "file_type": "pdf",
+            "chunk_index": 1,
+            "total_chunks": 2,
+            "char_count": 12,
+        },
     ]
 
-    # Test with full_text to trigger contextual prefix
-    full_text = "Bu çok uzun bir dökümandır ve içeriği oldukça geniştir. " * 20
-    assert service.index_chunks(chunks, full_text=full_text) == 1
-    
-    stored_chunks, _ = fake_store.upsert_payloads[0]
-    assert "[Bağlam: Doküman özeti]" in stored_chunks[0]["text"]
-    assert stored_chunks[0]["has_context"] is True
+    assert service.index_chunks(chunks) == 2
+    assert fake_embedding.seen_texts == ["Birinci chunk", "İkinci chunk"]
+    assert len(fake_store.upsert_payloads) == 1
+    stored_chunks, stored_embeddings = fake_store.upsert_payloads[0]
+    assert stored_chunks == chunks
+    assert stored_embeddings == [[13.0], [12.0]]
 
 
 def test_answer_question_returns_sources_without_llm_when_no_context(monkeypatch):
     service, _, fake_retriever, _ = build_service(monkeypatch)
-    fake_retriever.retrieve_with_diagnostics = lambda *args, **kwargs: {"chunks": []}
-    # Mock HyDE
-    monkeypatch.setattr(service, "_generate_hypothetical_answer", lambda q: "Varsayımsal cevap")
+    fake_retriever.retrieve = lambda *args, **kwargs: []
 
     result = service.answer_question("Soru nedir?")
 
     assert result["answer"].startswith("İlgili bağlam bulunamadı.")
     assert result["sources"] == []
+    assert result["context"] == []
+    assert result["model"]
 
 
 def test_answer_question_builds_context_and_sources(monkeypatch):
     service, _, _, _ = build_service(monkeypatch)
     monkeypatch.setattr(service, "_call_groq", lambda prompt, system_prompt=None: "Yanıt üretildi")
-    monkeypatch.setattr(service, "_generate_hypothetical_answer", lambda q: "Varsayımsal cevap")
-    monkeypatch.setattr(service, "_rerank_candidates", lambda q, c, k: c)
 
     result = service.answer_question("Belge ne anlatıyor?")
 
     assert result["answer"] == "Yanıt üretildi"
     assert result["sources"][0]["source_file"] == "dosya.pdf"
+    assert result["context"][0]["text"] == "Chunk 1 içerik"
 
 
 def test_summarize_documents_uses_retrieved_chunks(monkeypatch):

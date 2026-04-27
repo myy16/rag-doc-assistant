@@ -76,7 +76,7 @@ def _process_content(filename: str, ext: str, content: bytes, username: str = ""
     )
 
     if chunks:
-        service.index_chunks(chunks, full_text=cleaned_text)
+        service.index_chunks(chunks)
 
     return {
         "file_id": file_id,
@@ -138,7 +138,7 @@ def _stream_process_content_events(filename: str, ext: str, content: bytes, user
 
     if chunks:
         yield {"event": "stage", "stage": "Embedding ve indeksleme", "filename": filename}
-        service.index_chunks(chunks, full_text=cleaned_text)
+        service.index_chunks(chunks)
 
     result = {
         "file_id": file_id,
@@ -225,6 +225,13 @@ async def upload_documents_stream(
                 detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
                 payload = json.dumps(
                     {"event": "error", "filename": filename, "detail": detail},
+                    ensure_ascii=False,
+                )
+                yield f"data: {payload}\n\n"
+                await asyncio.sleep(0)
+            except Exception as exc:
+                payload = json.dumps(
+                    {"event": "error", "filename": filename, "detail": f"Unexpected error: {exc}"},
                     ensure_ascii=False,
                 )
                 yield f"data: {payload}\n\n"

@@ -25,33 +25,81 @@ from app.core.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
-RAG_SYSTEM_PROMPT = """Sen doğru ve kanıta dayalı yanıtlar sunan uzman bir Teknik Asistansın.
+RAG_SYSTEM_PROMPT = """You are an advanced RAG system with retrieval, reasoning, and self-evaluation capabilities.
 
-## KURALLAR: ÖNCE KANIT
-1. Sağlanan bağlam (context) dışına asla çıkma.
-2. Söylediğin her şey bağlamdaki bir kaynağa dayanmalı.
-3. Eğer bağlamda bilgi yoksa, "Sunulan dökümanlarda bu sorunun cevabını bulamadım." de.
+Your job is to ANSWER the question using the provided context — even if confidence scores are low.
 
-## HALLUCINATION GUARD (ZORUNLU)
-Cevabını vermeden önce kendine şu soruyu sor: "Bu bilgi dökümanda geçiyor mu yoksa kendi eğitim verimden mi geliyor?" Sadece dökümanda geçeni yaz.
+---
 
-## AKIL YÜRÜTME (Düşünce Süreci)
-Cevabı vermeden önce şunları yap:
-1. Sorudaki anahtar kavramları belirle.
-2. Bağlamda bu kavramları ara.
-3. Bilginin yeterli olup olmadığını tart.
+## CRITICAL OVERRIDE RULE
 
-## ÇIKTI FORMATI (ZORUNLU)
-1. Metin içinde asla [Source: ...] gibi teknik atıflar kullanma.
-2. Cevabını MUTLAKA şu yapıda ver:
-Düşünce Süreci: <burada kısa akıl yürütme sürecini açıkla>
-Nihai Cevap: <burada dökümanlara dayalı nihai cevabını ver. Kaynak belirtme, sadece metni yaz.>
+If the answer is explicitly present in the context,
+YOU MUST answer the question.
 
-## BAŞARISIZLIK DURUMU
-Eğer bağlamda bilgi yoksa:
-"Sunulan dökümanlarda bu sorunun cevabını bulamadım." de.
+DO NOT refuse to answer due to:
+* low confidence
+* low coverage
+* low relevance scores
 
-Dili TÜRKÇE, tonu profesyonel tut.
+These scores are ONLY hints, not hard constraints.
+
+---
+
+## CONTEXT TRUST LOGIC
+
+Treat the context as the source of truth.
+
+If ANY of the following is true:
+* A keyword from the question appears in the context
+* A named entity (event, person, project) is present
+* The answer can be directly extracted from a sentence
+
+→ THEN the context is SUFFICIENT.
+
+---
+
+## FAILURE CONDITION (STRICT)
+
+ONLY say "insufficient context" IF:
+* The answer is completely absent
+* OR there is zero mention of relevant entities
+
+---
+
+## QUESTION EXAMPLE
+
+Question:
+"Yusuf hangi yarışmaya katılmış?"
+
+Context:
+"... TEKNOFEST gibi yarışmalarda ..."
+
+CORRECT BEHAVIOR:
+* Detect "TEKNOFEST"
+* Return it as the answer
+
+INCORRECT BEHAVIOR:
+* Saying "coverage low"
+* Saying "confidence low"
+* Refusing to answer
+
+---
+
+## OUTPUT RULES
+
+* Give a direct, short answer
+* Do NOT mention evaluation scores
+* Do NOT mention confidence
+* Do NOT mention retrieval metrics
+
+---
+
+## FINAL INSTRUCTION
+
+Even if evaluation signals are weak,
+IF the answer is visible → RETURN IT.
+
+Never hide a correct answer due to scoring heuristics.
 """
 
 
@@ -62,13 +110,6 @@ class RagService:
         self.vector_store = get_vector_store()
         self.model_name = GROQ_MODEL_NAME
         self.api_key = GROQ_API_KEY
-        
-        try:
-            from groq import Groq  # type: ignore[import-not-found]
-            self.client = Groq(api_key=self.api_key)
-        except ImportError:
-            self.client = None
-            
         self.llm_timeout_seconds = LLM_TIMEOUT_SECONDS
         self.llm_max_retries = max(0, LLM_MAX_RETRIES)
         self.llm_retry_base_delay_seconds = max(0.0, LLM_RETRY_BASE_DELAY_SECONDS)
@@ -81,34 +122,16 @@ class RagService:
         self._llm_consecutive_failures = 0
         self._llm_circuit_open_until = 0.0
 
-    def index_chunks(self, chunks: List[Dict[str, Any]], full_text: Optional[str] = None) -> int:
+    def index_chunks(self, chunks: List[Dict[str, Any]]) -> int:
         if not chunks:
             logger.debug("No chunks received for indexing.")
             return 0
 
-        # Master Level: Structural Context Injection (Super Fast Indexing)
-        # Instead of LLM summaries, we detect headings using regex for context
-        # This reduces indexing time from 20-30s per doc to milliseconds
         try:
-            # Simple heading detection: look for lines with 2-4 words that are likely headers
-            headings = re.findall(r"(?m)^(?:[0-9\.]+\s*)?([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜa-zçğıöşü\s]{3,40})$", full_text or "")
-            main_topic = headings[0] if headings else "Genel Bilgi"
-            context_prefix = f"[Bölüm: {main_topic}]"
-            logger.info("Structural Context: Detected main topic '%s' in milliseconds.", main_topic)
-        except Exception:
-            context_prefix = "[Genel Bağlam]"
-
-        try:
-            # Apply structural context to ALL chunks
-            for chunk in chunks:
-                # If we have a local heading for this specific chunk, use it (future improvement)
-                chunk["text"] = f"{context_prefix}\n\n{chunk['text']}"
-                chunk["has_structural_context"] = True
-            
-            texts = [c["text"] for c in chunks]
+            texts = [chunk["text"] for chunk in chunks]
             embeddings = self.embedding_service.embed_texts(texts)
             count = self.vector_store.upsert_chunks(chunks=chunks, embeddings=embeddings)
-            logger.info("Indexed %s chunks using Structural Context Injection (No LLM overhead).", count)
+            logger.info("Indexed %s chunks into vector store.", count)
             return count
         except Exception as exc:
             logger.exception("Failed to index chunks into vector store.")
@@ -123,20 +146,10 @@ class RagService:
         username: Optional[str] = None,
     ) -> Dict[str, Any]:
         try:
-            # 1. HyDE: Generate hypothetical answer to improve retrieval
-            hypothetical_answer = ""
-            try:
-                hypothetical_answer = self._generate_hypothetical_answer(question)
-                logger.info("HyDE: Generated hypothetical answer.")
-            except Exception as exc:
-                logger.warning("HyDE failed, using original query: %s", exc)
-
-            # 2. Retrieval: Use both original query and HyDE answer
-            search_query = f"{question} {hypothetical_answer}".strip()
             if hasattr(self.retriever, "retrieve_with_diagnostics"):
                 retrieval = self.retriever.retrieve_with_diagnostics(
-                    query=search_query,
-                    top_k=top_k * 2,  # Get more candidates for reranking
+                    query=question,
+                    top_k=top_k,
                     file_id=file_id,
                     source_file=source_file,
                     username=username or None,
@@ -144,8 +157,8 @@ class RagService:
                 chunks = retrieval.get("chunks", [])
             else:
                 chunks = self.retriever.retrieve(
-                    search_query,
-                    top_k=top_k * 2,
+                    question,
+                    top_k=top_k,
                     file_id=file_id,
                     source_file=source_file,
                     username=username or None,
@@ -154,12 +167,8 @@ class RagService:
                     "confidence_score": 0.0,
                     "context_coverage": 0.0,
                     "retrieval_quality": bool(chunks),
-                    "query_variants": [search_query],
+                    "query_variants": [question],
                 }
-
-            # 3. Reranking: Refine candidates using LLM scores/logic
-            if chunks:
-                chunks = self._rerank_candidates(question, chunks, top_k)
         except Exception as exc:
             logger.exception("Retriever failed while answering question.")
             raise RuntimeError("Failed to retrieve context for question.") from exc
@@ -223,28 +232,29 @@ class RagService:
         data: {"type": "sources", "content": [...]}
         """
         try:
-            # 1. Intelligent HyDE (Speed Optimization)
-            # Skip HyDE for simple/short queries to save ~15s
-            hypothetical_answer = ""
-            if len(question.split()) > 8:
-                try:
-                    hypothetical_answer = self._generate_hypothetical_answer(question)
-                except Exception: pass
-            
-            # 2. Hybrid Retrieval
-            search_query = f"{question} {hypothetical_answer}".strip()
-            retrieval = self.retriever.retrieve_with_diagnostics(
-                query=search_query,
-                top_k=top_k * 2,
-                file_id=file_id,
-                source_file=source_file,
-                username=username or None,
-            )
-            chunks = retrieval.get("chunks", [])
-
-            # 3. Fast Reranking
-            if chunks:
-                chunks = self._rerank_candidates(question, chunks, top_k)
+            if hasattr(self.retriever, "retrieve_with_diagnostics"):
+                retrieval = self.retriever.retrieve_with_diagnostics(
+                    query=question,
+                    top_k=top_k,
+                    file_id=file_id,
+                    source_file=source_file,
+                    username=username or None,
+                )
+                chunks = retrieval.get("chunks", [])
+            else:
+                chunks = self.retriever.retrieve(
+                    question,
+                    top_k=top_k,
+                    file_id=file_id,
+                    source_file=source_file,
+                    username=username or None,
+                )
+                retrieval = {
+                    "confidence_score": 0.0,
+                    "context_coverage": 0.0,
+                    "retrieval_quality": bool(chunks),
+                    "query_variants": [question],
+                }
         except Exception as exc:
             logger.exception("Retriever failed while preparing streaming answer.")
             raise RuntimeError("Failed to retrieve context for streaming question.") from exc
@@ -265,17 +275,10 @@ class RagService:
             return
 
 
-        # Step 4: Self-Correction Loop (Master Level)
-        # We perform a quick self-evaluation and re-generate if needed
-        # (This is simplified for streaming; in a real loop, we might re-stream the whole thing)
-        # For now, we'll implement the logic to check after completion and log it
-        # In a non-streaming version, this is where the retry would happen.
-        # But wait, I'll add a 'validation' step after reasoning.
+        context_text = self._build_context(chunks)
+        prompt = f"Context:\n{context_text}\n\nQuestion: {question}\nAnswer:"
 
         answer_parts: List[str] = []
-        context = self._build_context(chunks)
-        prompt = f"BAĞLAM:\n{context}\n\nSORU: {question}"
-
         # Stream tokens from Groq; if it fails, degrade gracefully to context-based fallback text.
         try:
             for token in self._call_groq_stream(prompt=prompt, system_prompt=RAG_SYSTEM_PROMPT):
@@ -343,19 +346,9 @@ class RagService:
             "model": self.model_name,
         }
 
-    def _clean_source_citations(self, text: str) -> str:
-        """Master Level: Forcefully remove any in-text citations like [Source: doc.pdf:123]"""
-        import re
-        # Remove [Source: ...] and [Kaynak: ...] patterns
-        cleaned = re.sub(r"\[(?:Source|Kaynak|Doc|Doküman):\s*[^\]]+\]", "", text)
-        # Remove empty brackets if any remain
-        cleaned = re.sub(r"\[\s*\]", "", cleaned)
-        return cleaned.strip()
-
     def _generate_answer(self, question: str, context_text: str) -> str:
-        prompt = f"Bağlam:\n{context_text}\n\nSoru: {question}\n\nLütfen (Düşünce Süreci, Nihai Cevap) formatını kullanarak cevapla."
-        res = self._call_groq(prompt=prompt, system_prompt=RAG_SYSTEM_PROMPT)
-        return self._clean_source_citations(res)
+        prompt = f"Context:\n{context_text}\n\nQuestion: {question}\nAnswer:"
+        return self._call_groq(prompt=prompt, system_prompt=RAG_SYSTEM_PROMPT)
 
     def _generate_summary(self, context_text: str) -> str:
         prompt = (
@@ -365,45 +358,14 @@ class RagService:
         )
         return self._call_groq(prompt=prompt)
 
-    def _generate_document_summary(self, text: str) -> str:
-        prompt = (
-            "Aşağıdaki metin dökümanın giriş kısmıdır. "
-            "Bu dökümanın ne hakkında olduğunu anlatan 15 kelimelik çok kısa bir özet yaz.\n\n"
-            f"Metin: {text[:2000]}\n\nÖzet:"
-        )
-        return self._call_groq(prompt=prompt)
-
-    def _generate_hypothetical_answer(self, question: str) -> str:
-        prompt = (
-            f"Soru: {question}\n\n"
-            "Bu soruya verilebilecek olası ve ayrıntılı bir cevabı uydurarak (hypothetical) yaz. "
-            "Bu metin bir arama sorgusu olarak kullanılacaktır."
-        )
-        hyde_answer = self._call_groq(prompt=prompt, system_prompt="Sen bir arama motoru optimizasyon uzmanısın.")
-        logger.info("HyDE generated hypothetical answer: %s...", hyde_answer[:100])
-        return hyde_answer
-
-    def _rerank_candidates(self, question: str, chunks: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
-        """Master Level: Batch LLM reranking for high precision."""
-        if not chunks: return []
-        chunks.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
-        candidates, others = chunks[:10], chunks[10:]
-        try:
-            batch_texts = [f"[ID:{i}] {c.get('text','')[:300]}" for i, c in enumerate(candidates)]
-            prompt = f"Soru: {question}\n\nAdaylar:\n{chr(10).join(batch_texts)}\n\nFormat: 'ID: PUAN' (0-10)"
-            res = self._call_groq(prompt=prompt, system_prompt="Sadece puanları dön.")
-            for i, c in enumerate(candidates):
-                match = re.search(rf"ID:\s*{i}.*?PUAN:\s*(\d+)", res, re.I) or re.search(rf"{i}:\s*(\d+)", res)
-                score = int(match.group(1)) if match else 5
-                c["rerank_score"] = (score / 10.0) * 0.7 + c.get("final_score", 0.0) * 0.3
-            candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
-        except: pass
-        return (candidates + others)[:top_k]
-
     def _call_groq(self, prompt: str, system_prompt: str = "You answer strictly using the given context.") -> str:
-        """Helper to call Groq completion API with retries and circuit breaking."""
-        if not self.client:
-            raise RuntimeError("Groq client is not initialized.")
+        try:
+            from groq import Groq  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise RuntimeError("groq is not installed. Install backend dependencies first.") from exc
+
+        if not self.api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured.")
 
         if self._is_llm_circuit_open():
             remaining = max(0.0, self._llm_circuit_open_until - time.time())
@@ -413,14 +375,14 @@ class RagService:
         for attempt in range(1, attempts + 1):
             started_at = time.perf_counter()
             try:
-                response = self.client.chat.completions.create(
+                client = Groq(api_key=self.api_key, timeout=self.llm_timeout_seconds, max_retries=0)
+                response = client.chat.completions.create(
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=0.2,
-                    timeout=self.llm_timeout_seconds,
                 )
                 elapsed = time.perf_counter() - started_at
                 self._record_llm_success()
@@ -461,8 +423,13 @@ class RagService:
 
     def _call_groq_stream(self, prompt: str, system_prompt: str = "You answer strictly using the given context."):
         """Stream tokens from Groq API. Yields text chunks."""
-        if not self.client:
-            raise RuntimeError("Groq client is not initialized.")
+        try:
+            from groq import Groq  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise RuntimeError("groq is not installed. Install backend dependencies first.") from exc
+
+        if not self.api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured.")
 
         if self._is_llm_circuit_open():
             remaining = max(0.0, self._llm_circuit_open_until - time.time())
@@ -473,7 +440,8 @@ class RagService:
             started_at = time.perf_counter()
             emitted_tokens = 0
             try:
-                stream = self.client.chat.completions.create(
+                client = Groq(api_key=self.api_key, timeout=self.llm_timeout_seconds, max_retries=0)
+                stream = client.chat.completions.create(
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": system_prompt},
@@ -481,7 +449,6 @@ class RagService:
                     ],
                     temperature=0.2,
                     stream=True,
-                    timeout=self.llm_timeout_seconds,
                 )
                 for chunk in stream:
                     token = chunk.choices[0].delta.content

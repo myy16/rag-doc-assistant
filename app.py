@@ -242,6 +242,11 @@ with st.sidebar:
                 st.warning("Yükleme tamamlandı ama işlenecek dosya döndürülmedi.")
         except requests.exceptions.Timeout:
             st.error("Yükleme uzun sürdü. Backend hâlâ indeksliyor olabilir; lütfen biraz sonra tekrar dene.")
+        except requests.exceptions.ChunkedEncodingError:
+            st.error(
+                "Upload stream beklenmedik şekilde kesildi. "
+                "Backend logunu kontrol edip tekrar deneyin; dosyaların bir kısmı işlenmiş olabilir."
+            )
         except requests.exceptions.ConnectionError:
             st.error(f"Backend'e ulaşılamadı. Lütfen sunucunun çalıştığından emin olun. (Denenen URL: {BASE_URL})")
 
@@ -318,24 +323,6 @@ for msg in st.session_state.messages:
         if msg.get("sources"):
             source_names = list({s.get("source_file", "") for s in msg["sources"] if s.get("source_file")})
             st.caption("Kaynak: " + " · ".join(f"📄 {n}" for n in source_names))
-        if msg.get("evaluation"):
-            ev = msg.get("evaluation", {})
-            st.caption(
-                f"Kalite | relevance: {ev.get('context_relevance')} | "
-                f"recall: {ev.get('context_recall')} | "
-                f"faithfulness: {ev.get('faithfulness')} | "
-                f"answer: {ev.get('answer_relevance')}"
-            )
-            st.caption(
-                f"Self-Eval | IsREL: {ev.get('IsREL')} | "
-                f"IsSUP: {ev.get('IsSUP')} | IsUSE: {ev.get('IsUSE')}"
-            )
-        if msg.get("retrieval"):
-            rv = msg.get("retrieval", {})
-            st.caption(
-                f"Retrieval | confidence: {rv.get('confidence_score')} | "
-                f"coverage: {rv.get('context_coverage')} | quality: {rv.get('retrieval_quality')}"
-            )
 
 # Yeni soru
 if prompt := st.chat_input("Dokümanlarla ilgili ne öğrenmek istersin?"):
@@ -419,13 +406,6 @@ if prompt := st.chat_input("Dokümanlarla ilgili ne öğrenmek istersin?"):
                     source_names = list({s.get("source_file", "") for s in sources if s.get("source_file")})
                     st.caption("Kaynak: " + " · ".join(f"📄 {n}" for n in source_names))
 
-                if evaluation:
-                    st.caption(
-                        f"Kalite Skorları | "
-                        f"relevance: {evaluation.get('context_relevance')} | "
-                        f"faithfulness: {evaluation.get('faithfulness')} | "
-                        f"answer: {evaluation.get('answer_relevance')}"
-                    )
 
             st.session_state.messages.append({
                 "role": "assistant",
