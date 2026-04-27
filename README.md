@@ -82,8 +82,8 @@ graph TD
 brew install antiword
 
 # Projeyi klonla
-git clone https://github.com/myy16/P2P_YZTA.git
-cd P2P_YZTA
+git clone https://github.com/myy16/rag-doc-assistant.git
+cd rag-doc-assistant
 
 # ── Backend ──
 cd backend
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-> **Not:** `.env` dosyasını proje **kök dizininde** (`P2P_YZTA/.env`) oluştur:
+> **Not:** `.env` dosyasını proje **kök dizininde** (`rag-doc-assistant/.env`) oluştur:
 > ```
 > GROQ_API_KEY=your_key_here
 > ```
@@ -104,7 +104,7 @@ Swagger UI: http://127.0.0.1:8000/docs
 
 ```bash
 # ── Frontend (ayrı terminal) ──
-cd P2P_YZTA
+cd rag-doc-assistant
 pip install -r requirements.txt
 streamlit run app.py
 ```
@@ -119,7 +119,7 @@ Streamlit UI: http://localhost:8501
 
 ```bash
 # Proje kök dizininden
-cd P2P_YZTA
+cd rag-doc-assistant
 docker compose up --build
 ```
 
@@ -295,7 +295,7 @@ pytest tests/test_chunker.py -v
 ## Proje Yapısı
 
 ```
-P2P_YZTA/
+rag-doc-assistant/
 ├── app.py                       # Streamlit frontend arayüzü
 ├── requirements.txt             # Frontend bağımlılıkları (streamlit, requests)
 ├── Dockerfile                   # Frontend Docker image
