@@ -6,6 +6,7 @@
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_DB-6C3483?style=for-the-badge)
 ![Groq](https://img.shields.io/badge/Groq-LLaMA_3.3_70B-F54E00?style=for-the-badge)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Railway-8B5CF6?style=for-the-badge&logo=railway&logoColor=white)](https://frontend-production-6f279.up.railway.app)
 
 > Kullanıcıların sisteme yüklediği PDF, DOCX ve TXT dosyalarını analiz eden ve bu dokümanlar üzerinden yapay zeka ile sohbet edilmesini sağlayan bir **RAG (Retrieval-Augmented Generation)** projesidir.
 
