@@ -31,10 +31,11 @@ RUN apt-get update -o Acquire::http::Proxy=false -o Acquire::https::Proxy=false 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir \
+       --index-url https://download.pytorch.org/whl/cpu \
+       torch \
+    && pip install --no-cache-dir \
        --retries 5 \
        --default-timeout ${PIP_TIMEOUT} \
-       --index-url ${PIP_INDEX_URL} \
-       ${PIP_EXTRA_INDEX_URL:+--extra-index-url ${PIP_EXTRA_INDEX_URL}} \
        -r requirements.txt
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
