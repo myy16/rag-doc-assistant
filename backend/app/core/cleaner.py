@@ -10,7 +10,8 @@ def clean_text(raw_text: str) -> str:
     1. Remove null bytes and non-printable control characters
     2. Normalize Unicode to NFC (handles Turkish characters correctly)
     3. Strip common header/footer patterns (page numbers, repeated short lines)
-    4. Collapse excessive whitespace and blank lines
+    4. Remove noise-only lines (lines made of symbols like !!! @@ ## $$ %%)
+    5. Collapse excessive whitespace and blank lines
 
     Args:
         raw_text: Raw text extracted from a document parser.
@@ -24,6 +25,7 @@ def clean_text(raw_text: str) -> str:
     text = _remove_control_characters(raw_text)
     text = _normalize_unicode(text)
     text = _remove_header_footer_patterns(text)
+    text = _remove_noise_lines(text)
     text = _collapse_whitespace(text)
 
     return text.strip()
@@ -66,7 +68,7 @@ def _remove_header_footer_patterns(text: str) -> str:
         re.IGNORECASE,
     )
 
-    decorative_line_pattern = re.compile(r"^\s*[-_=*#~]{3,}\s*$")
+    decorative_line_pattern = re.compile(r"^\s*([-_=*#~]+\s*){3,}\s*$")
 
     for line in lines:
         stripped = line.strip()
@@ -79,26 +81,32 @@ def _remove_header_footer_patterns(text: str) -> str:
     return "\n".join(cleaned)
 
 
+def _remove_noise_lines(text: str) -> str:
+    """Remove lines that consist only of symbols/punctuation with no real words."""
+    lines = text.splitlines()
+    # A line is noise if it has no letters or digits at all
+    noise_pattern = re.compile(r"^[^a-zA-Z0-9À-ɏĀ-ž]*$")
+    cleaned = [line for line in lines if not noise_pattern.match(line.strip()) or line.strip() == ""]
+    return "\n".join(cleaned)
+
+
 def _collapse_whitespace(text: str) -> str:
     """
     - Replace multiple spaces/tabs on a single line with a single space
-    - Collapse 3+ consecutive blank lines into at most 2
+    - Collapse 2+ consecutive blank lines into at most 1
     - Strip trailing whitespace from each line
     """
-    # Strip trailing spaces on each line
     lines = [line.rstrip() for line in text.splitlines()]
 
-    # Collapse runs of blank lines (>2 consecutive) into 2
     result = []
     blank_count = 0
     for line in lines:
         if line == "":
             blank_count += 1
-            if blank_count <= 2:
+            if blank_count <= 1:
                 result.append(line)
         else:
             blank_count = 0
-            # Collapse multiple inline spaces/tabs to single space
             result.append(re.sub(r"[ \t]+", " ", line))
 
     return "\n".join(result)
